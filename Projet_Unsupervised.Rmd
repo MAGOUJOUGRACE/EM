@@ -1,0 +1,786 @@
+---
+title: "Modèles à variables latentes discrètes et Web surfing"
+author: "MAGOUJOU Grace"
+date: "2022-10-28"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(igraph)
+library(HMM)
+set.seed(20222023)
+```
+
+\
+
+# Algorithme Page Rank
+
+## Question 1
+
+```{r simulation de G}
+K = 8
+p = 0.4
+G = sample_gnp(n=K, p=p, directed=TRUE, loops=TRUE)
+G.adj = as_adjacency_matrix(G)
+plot(G)
+```
+
+## Question 2
+
+Notons $\{X_i\}$,$\{Z_i\}$ les processus aléatoires représentant
+respectivement les pages web successives sur lesquelles se trouve le
+surfeur et les actions successives du surfeur (1 pour cliquer sur un
+lien et 0 pour sauter sur une page web). On a par hypothèse :\
+$P(Z_i=0)=\epsilon$ et $X_{i+1}|Z_i=0$ suit une loi uniforme sur
+$V=\{1,...,K\}$.\
+$P(Z_i=1)=1-\epsilon$ et $X_{i+1}|Z_i=1,X_i=k$ suit une loi uniforme sur
+l'ensemble des enfants directs de $k$ dans $G$ qu'on notera $V^+_k$.\
+Ainsi,\
+$P(X_{i+1}=l|X_i=k)=P(X_{i+1}=l|Z_i=0,X_i=k)P(Z_i=0)+P(X_{i+1}=l|Z_i=1,X_i=k)P(Z_i=1)$\
+$=P(X_{i+1}=l|Z_i=0)P(Z_i=0)+P(X_{i+1}=l|Z_i=1,X_i=k)P(Z_i=1)$ par
+indépendance de $X_i$ et $X_{i+1}|Z_i=0$.\
+$=\frac{\epsilon}{K}+\textbf{1}_{l\in V_k^+} \frac{1-\epsilon}{|V_k^+|}$\
+On a donc comme matrice de transition de $\{X_i\}$,\
+$A=\{a_{kl}\}$ telle que
+$a_{kl}=\frac{\epsilon}{K}+\textbf{1}_{l\in V_k^+} \frac{1-\epsilon}{|V_k^+|}$\
+
+```{r calcul de A}
+eps = 0.05
+A = matrix(rep(eps/K,K*K), nrow=K, ncol=K)
+for (k in 1:K){
+  for (l in 1:K){
+    if (G.adj[k,l]==1){
+      A[k,l] = A[k,l]+(1-eps)/sum(G.adj[k,])
+    }
+  }
+}
+print(round(A,3))
+```
+
+\
+## Question 3 Supposons que $\{X_i\}$ est apériodique et irréductible,
+il existe alors un unique vecteur $\pi$ appelé état stationnaire tel que
+$\pi A=\pi$ et $\sum_{k=1}^K\pi_k=1$. Pour le calculer, on cherche la
+transposée du vecteur propre de $A^T$ associé à la valeur propre 1 qui
+vérifie la contrainte de normalité.\
+
+```{r calcul de pi}
+A.eig = eigen(t(A))
+pi = Re(A.eig$vectors[,signif(Re(A.eig$values),5)==1])
+pi = pi/sum(pi)
+print(round(pi,3))
+
+# Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(pi%*%A-pi)),mean(abs(pi%*%A-pi))))
+```
+
+## Question 4
+
+```{r simulation de X}
+n= 1000
+x = rep(0,n+1)
+x[1] = 1
+for (i in 2:(n+1)){
+  x[i] = sample(x=1:K, size=1, prob=A[x[i-1],])
+}
+```
+
+On cherche un estimateur $\hat{A}$ de la matrice de transition $A$ en
+maximisant la log-vraisemblance de $X=x$ sous contrainte de normalité :\
+$\hat{A}=arg\ max_{\forall k,\sum_{l=1}^K A^*_{kl}=1}\ l_x(A^*)$\
+Où la log-vraisemblance est :\
+$l_x(A^*)=log\ P(X=x|A^*)$\
+$=log\ \prod_{i=1}^n P(X_{i+1}=x_{i+1}|X_i=x_i,A^*)$ car
+$P(X_1=x_1|A^*)=1$ pour tout $A^*$\
+$=log\ \prod_{k,l=1}^K (A^*_{kl})^{n_{kl}}$ où
+$n_{kl}=\sum_{i=1}^n \textbf{1}_{X_i=k,X_{i+1}=l}$\
+$=\sum_{k,l=1}^K n_{kl}\ log\ A_{kl}^*$\
+On définit alors le lagrangien de $l_x$ associé à la contrainte de
+normalité pour la $k^{ème}$ ligne de $A^*$ :\
+$L(A_k^*,\lambda_k)=\sum_{l=1}^K n_{kl}\ log\ A_{kl}^*+\lambda(1-\sum_{l=1}^K A^*_{kl})$\
+On a par définition :\
+$\frac{\partial\ L(\hat{A}_k,\lambda_k)}{\partial\ \hat{A}_{kl}}=0 \Leftrightarrow \frac{n_{kl}}{Â_{kl}}-\lambda_k=0 \Leftrightarrow \hat{A}_{kl}=\frac{n_{kl}}{\lambda_k}$\
+On a par ailleurs :\
+$\sum_{l=1}^K \hat{A}_{kl}=\sum_{l=1}^K \frac{n_{kl}}{\lambda_k}=1 \Leftrightarrow \lambda_k=\sum_{l=1}^K n_{kl}$\
+d'où, $\hat{A}_{kl}=\frac{n_{kl}}{\sum_{l'=1}^K n_{kl'}}$\
+
+```{r estimation de A}
+A.est = matrix(0, nrow=K, ncol=K)
+N = matrix(0, nrow=K, ncol=K)
+for (i in 1:n){
+  N[x[i],x[i+1]] = N[x[i],x[i+1]]+1
+}
+
+A.est = N
+for (k in 1:K){
+  A.est[k,] = A.est[k,]/sum(N[k,])
+}
+print(round(A.est,3))
+
+#Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(A-A.est)),mean(abs(A-A.est))))
+```
+
+\
+
+```{r estimation de pi}
+A.est.eig = eigen(t(A.est))
+pi.est = Re(A.est.eig$vectors[,signif(Re(A.est.eig$values),5)==1])
+pi.est = pi.est/sum(pi.est)
+print(pi.est)
+
+# Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(pi.est-pi)),mean(abs(pi.est-pi))))
+```
+
+# Communauté Web
+
+## Parcours Web
+
+## Question 1
+
+Notons $\{X_i\}$ et $\{Z_i\}$ respectivement les processus d'émission et
+d'états cachés du modèle. On identifira par $\{1,...,P=10\}^2$ et
+$\{1,...,K=3\}$ les valeurs prises par les variables de ces deux
+processus selon l'ordre dans lequel elles sont présentées dans la table
+1. On supposera également que $Z_1$ suit une loi uniforme définie par
+$\pi=(\frac{1}{6},\frac{1}{3},\frac{1}{2})$. On a en résumé :\
+$P(Z_1=k)=\pi_k$\
+$P(Z_{i+1}=l|Z_i=k)=A_{kl}$\
+$P(X_i=(p,q)|Z_i=k)=B_{pk}B_{qk}$ car les deux mots-clefs d'une page
+sont indépendants conditionnellement au groupe thématique de la page.
+
+```{r simulation de X et Z}
+K = 3; P = 10
+A = matrix(c(0.7, 0.2,0.1,
+             0.25,0.7,0.05,
+             0.1, 0.1,0.8),
+           nrow=K, ncol=K, byrow=TRUE)
+B = matrix(c(0.2,0,  0.1,
+             0,  0.1,0.3,
+             0.1,0.3,0,
+             0.1,0.2,0.2,
+             0.2,0,  0.1,
+             0.3,0,  0,
+             0.1,0.1,0.1,
+             0,  0,  0.2,
+             0,  0.2,0,
+             0,  0.1,0),
+           nrow=P, ncol=K, byrow=TRUE)
+pi = c(1/6,1/3,1/2)
+
+N = 30; n = 100
+x = array(0, dim=c(N,n,2))
+z = matrix(0, nrow=N, ncol=n)
+z[,1] = sample(1:K, size=N, replace=TRUE, prob=pi)
+for (sim in 1:N){
+  x[sim,1,] = sample(1:P, size=2, replace=TRUE, prob=B[,z[sim,1]])
+  for (i in 2:n){
+    z[sim,i] = sample(1:K, size=1, prob=A[z[sim,i-1],])
+    x[sim,i,] = sample(1:P, size=2, replace=TRUE, prob=B[,z[sim,i]])  
+  }
+}
+```
+
+## Question 2
+
+On cherche dans cette question à estimer les paramètres
+$\hat{\theta}=(\hat{A},\hat{B},\hat{\pi})$ du modèle maximisant la
+vraisemblance marginale des $N$ séquences d'émissions
+$x=(x^{(1)},...,x^{(N)})$ :\
+$\hat{\theta}=arg\ max_{\forall k,\sum_{l=1}^K A^*_{kl}=\sum_{p=1}^P B^*_{pk}=\sum_{l=1}^K \pi^*_k=1}\ l_x(\theta^*)$\
+où $l_x(\theta^*)=log\ P(X=x|\theta^*)$\
+Néanmoins, il n'est pas possible de trouver de maximum global pour ce
+problème et nous utiliserons donc une méthode basée sur l'algorithme EM
+qui permet de construire une suite $\{\theta^{(q)}\}$ convergeant vers
+un maximum local :\
+$\theta^{(q+1)}=arg\ max_{\forall k,\sum_{l=1}^K A^*_{kl}=\sum_{p=1}^P B^*_{pk}=\sum_{l=1}^K \pi^*_k=1}\ E_{Z|X=x,\theta^{(q)}}[l_{x,z}(\theta^*)]$\
+On initialise $\theta^{(0)}$ de manière aléatoire avec une loi uniforme
+puis on calcule les $\theta^{(q)}$ avec l'algorithme de Baum-Welch.\
+\
+
+```{r algorithme de Baum-Welch (sans log)}
+#####################################################
+# Estime les paramètres d'un modèle HMM à partir de 
+# séquences d'observations simulées et évalue les   
+# performances de l'estimation à partir des vrais    
+# paramètres.
+#####################################################
+BaumWelch = function(x, A, B, pi, max.time=15, itmax=100, eps=1e-3){
+  N = dim(x)[1] ; n = dim(x)[2] ; K = dim(A)[1] ; P = dim(B)[1]
+  start.time = Sys.time()
+  # initialisation aléatoire uniforme de theta
+  A.est = matrix(runif(K*K,0,1), nrow=K, ncol=K)
+  B.est = matrix(runif(P*K,0,1), nrow=P, ncol=K)
+  pi.est = runif(K,0,1)
+  # normalisation de theta
+  for (k in 1:K){
+    A.est[k,] = A.est[k,]/sum(A.est[k,])
+    B.est[,k] = B.est[,k]/sum(B.est[,k])
+  }
+  pi.est = pi.est/sum(pi.est)
+  output = list()
+  output$init = list(A.0=A.est, B.0=B.est, pi.0=pi.est)
+  # variables de l'algorithme
+  alpha = array(0, dim=c(N,K,n))
+  beta = array(0, dim=c(N,K,n))
+  gamma = array(0, dim=c(N,K,n))
+  xi = array(0, dim=c(N,K,K,n-1))
+  # logvraisemblance et erreur
+  loglik = rep(0,itmax) ; dloglik = 1e+5
+  err = data.frame(A=rep(0,itmax),B=0,pi=0)
+  it = 0
+  while (dloglik > (max(loglik[1:it])-min(loglik[1:it]))*eps & Sys.time()-start.time < max.time & it < itmax){ # critères d'arrêt
+    # calcul des alpha et beta (forward-backward)
+    alpha[,,1] = sweep(B.est[x[,1,1],]*B.est[x[,1,2],],2,pi.est,'*')
+    beta[,,n] = 1
+    for (sim in 1:N){
+      for (i in 2:n){
+        for (k in 1:K){
+          alpha[sim,k,i] = sum(alpha[sim,,i-1]*A.est[,k])*B.est[x[sim,i,1],k]*B.est[x[sim,i,2],k]
+          beta[sim,k,n-i+1] = sum(beta[sim,,n-i+2]*A.est[k,]*B.est[x[sim,n-i+2,1],]*B.est[x[sim,n-i+2,2],])
+        }
+      }
+    }
+    # calcul des gamma et xi
+    gamma = alpha*beta
+    gamma = sweep(gamma,c(1,3),apply(gamma,c(1,3),sum),'/')
+    for (sim in 1:N){
+      for (i in 1:(n-1)){
+        for (k in 1:K){
+          xi[sim,k,,i] = alpha[sim,k,i]*beta[sim,,i+1]*A.est[k,]*B.est[x[sim,i+1,1],]*B.est[x[sim,i+1,2],]
+        }
+      }
+    }
+    xi = sweep(xi,c(1,4),apply(xi,c(1,4),sum),'/')
+    # calcul de theta^(q+1)
+    pi.est = apply(gamma[,,1],2,sum)/N
+    A.est = apply(xi,c(2,3),sum)
+    A.est = sweep(A.est,1,apply(A.est,1,sum),'/')
+    for (k in 1:K){
+      for (p in 1:P){
+        B.est[p,k] = sum(gamma[,k,][x[,,1]==p])
+      }
+    }
+    B.est = sweep(B.est,2,apply(B.est,2,sum),'/')
+    it = it+1
+    # calcul de la logvraisemblance
+    loglik[it] = sum(apply(log(alpha[,,n]),1,logsumexp))
+    if (it > 1){
+      dloglik = loglik[it]-loglik[it-1]
+    }
+    # calcul des erreurs
+    true.states = rep(0,K)
+    for (k in 1:K){
+      true.states[k] = which.min(apply(abs(B.est-B[,k]),2,sum))
+    }
+    if (any(duplicated(true.states))){
+      true.states = c(1,2,3)
+    }
+    err$A[it] = mean(abs(A.est[true.states,true.states]-A))
+    err$B[it] = mean(abs(B.est[,true.states]-B))
+    err$pi[it] = mean(abs(pi.est[true.states]-pi))
+  }
+  A.est = A.est[true.states,true.states]
+  B.est = B.est[,true.states]
+  pi.est = pi.est[true.states]
+  # mise à jour de la sortie
+  output$est = list(A=A.est, B=B.est, pi=pi.est)
+  output$it = it
+  output$loglik = loglik[1:it]
+  output$err = err[1:it,]
+  output$exec.time = Sys.time()-start.time
+  return(output)
+}
+```
+
+\
+Etant donné que les probabilités calculées peuvent être très petites et
+qu'il y a un risque d'underflow, on implémente aussi une version
+manipulant les logarithmes de ces probabilités.\
+\
+
+```{r algorithme de Baum-Welch (avec log)}
+logsumexp = function(x){
+  m = max(x)
+  return (m+log(sum(exp(x-m))))
+}
+
+#####################################################
+# Estime les paramètres d'un modèle HMM à partir de 
+# séquences d'observations simulées et évalue les   
+# performances de l'estimation à partir des vrais    
+# paramètres.
+#####################################################
+logBaumWelch = function(x, A, B, pi, max.time=15, itmax=100, eps=1e-3){
+  N = dim(x)[1] ; n = dim(x)[2] ; K = dim(A)[1] ; P = dim(B)[1]
+  start.time = Sys.time()
+  # initialisation aléatoire uniforme de theta
+  A.est = matrix(runif(K*K,0,1), nrow=K, ncol=K)
+  B.est = matrix(runif(P*K,0,1), nrow=P, ncol=K)
+  pi.est = runif(K,0,1)
+  # normalisation de theta
+  for (k in 1:K){
+    A.est[k,] = A.est[k,]/sum(A.est[k,])
+    B.est[,k] = B.est[,k]/sum(B.est[,k])
+  }
+  pi.est = pi.est/sum(pi.est)
+  output = list()
+  output$init = list(A.0=A.est, B.0=B.est, pi.0=pi.est)
+  logA.est = log(A.est)
+  logB.est = log(B.est)
+  logpi.est = log(pi.est)
+  # variables de l'algorithme
+  logalpha = array(0, dim=c(N,K,n))
+  logbeta = array(0, dim=c(N,K,n))
+  loggamma = array(0, dim=c(N,K,n))
+  logxi = array(0, dim=c(N,K,K,n-1))
+  # logvraisemblance et erreur
+  loglik = rep(0,itmax) ; dloglik = 1e+5
+  err = data.frame(A=rep(0,itmax),B=0,pi=0)
+  it = 0
+  while (dloglik > (max(loglik[1:it])-min(loglik[1:it]))*eps & Sys.time()-start.time < max.time & it < itmax){ # critères d'arrêt
+    # calcul des alpha et beta (forward-backward)
+    logalpha[,,1] = sweep(logB.est[x[,1,1],]+logB.est[x[,1,2],],2,pi.est,'+')
+    logbeta[,,n] = 0
+    for (sim in 1:N){
+      for (i in 2:n){
+        for (k in 1:K){
+          logalpha[sim,k,i] = logsumexp(logalpha[sim,,i-1]+logA.est[,k])+logB.est[x[sim,i,1],k]+logB.est[x[sim,i,2],k]
+          logbeta[sim,k,n-i+1] = logsumexp(logbeta[sim,,n-i+2]+logA.est[k,]+logB.est[x[sim,n-i+2,1],]+logB.est[x[sim,n-i+2,2],])
+        }
+      }
+    }
+    # calcul des gamma et xi
+    loggamma = logalpha+logbeta
+    loggamma = sweep(loggamma,c(1,3),apply(loggamma,c(1,3),logsumexp),'-')
+    for (sim in 1:N){
+      for (i in 1:(n-1)){
+        for (k in 1:K){
+          logxi[sim,k,,i] = logalpha[sim,k,i]+logbeta[sim,,i+1]+logA.est[k,]+logB.est[x[sim,i+1,1],]+logB.est[x[sim,i+1,2],]
+        }
+      }
+    }
+    logxi = sweep(logxi,c(1,4),apply(logxi,c(1,4),logsumexp),'-')
+    # calcul de theta^(q+1)
+    logpi.est = apply(loggamma[,,1],2,logsumexp)-log(N)
+    logA.est = apply(logxi,c(2,3),logsumexp)
+    logA.est = sweep(logA.est,1,apply(logA.est,1,logsumexp),'-')
+    for (k in 1:K){
+      for (p in 1:P){
+        logB.est[p,k] = logsumexp(loggamma[,k,][x[,,1]==p])
+      }
+    }
+    logB.est = sweep(logB.est,2,apply(logB.est,2,logsumexp),'-')
+    it = it+1
+    # calcul de la logvraisemblance
+    loglik[it] = sum(apply(logalpha[,,n],1,logsumexp))
+    if (it > 1){
+      dloglik = loglik[it]-loglik[it-1]
+    }
+    # calcul des erreurs
+    true.states = rep(0,K)
+    for (k in 1:K){
+      true.states[k] = which.min(apply(abs(exp(logB.est)-B[,k]),2,sum))
+    }
+    if (any(duplicated(true.states))){
+      true.states = c(1,2,3)
+    }
+    err$A[it] = mean(abs(exp(logA.est)[true.states,true.states]-A))
+    err$B[it] = mean(abs(exp(logB.est)[,true.states]-B))
+    err$pi[it] = mean(abs(exp(logpi.est)[true.states]-pi))
+  }
+  A.est = exp(logA.est)[true.states,true.states]
+  B.est = exp(logB.est)[,true.states]
+  pi.est = exp(logpi.est)[true.states]
+  # mise à jour de la sortie
+  output$est = list(A=A.est, B=B.est, pi=pi.est)
+  output$it = it
+  output$loglik = loglik[1:it]
+  output$err = err[1:it,]
+  output$exec.time = Sys.time()-start.time
+  return(output)
+}
+```
+
+\
+On évalue ensuite les performances de nos deux versions de l'algorithme
+de Baum-Welch en lançant 20 fois chacune des versions (qui démarrent
+avec des paramètres initiaux différents).\
+\
+
+```{r évaluation de l algorithme}
+# estimations de A, B et pi pour les simulations
+num.pi = rep(0,K)
+num.A = matrix(0,K,K)
+num.B = matrix(0,K,P)
+for (sim in 1:N){
+  num.pi[z[sim,1]] = num.pi[z[sim,1]]+1
+  for (i in 1:(n-1)){
+    num.A[z[sim,i],z[sim,i+1]] = num.A[z[sim,i],z[sim,i+1]]+1
+    num.B[z[sim,i],x[sim,i,1]] = num.B[z[sim,i],x[sim,i,1]]+1
+    num.B[z[sim,i],x[sim,i,1]] = num.B[z[sim,i],x[sim,i,1]]+2
+  }
+  num.B[z[sim,n],x[sim,n,1]] = num.B[z[sim,n],x[sim,n,1]]+1
+  num.B[z[sim,n],x[sim,n,1]] = num.B[z[sim,n],x[sim,n,1]]+2
+}
+A.sim = num.A
+B.sim = t(num.B)
+for (k in 1:K){
+  A.sim[k,] = A.sim[k,]/sum(num.A[k,])
+  B.sim[,k] = B.sim[,k]/sum(num.B[k,])
+}
+pi.sim = num.pi/sum(num.pi)
+
+# evaluation des performances des deux fonctions (avec et sans log)
+perf = data.frame(loglik=rep(0,40), err=0, err.sim.A=0, err.sim.B=0, err.sim.pi=0 , exec.time=0, it=0, log=FALSE)
+BWs = list() ; logBWs = list()
+for (i in 1:20){
+  BWs[[i]] = BaumWelch(x,A,B,pi)
+  perf$err[i] = mean(as.matrix(BWs[[i]]$err[BWs[[i]]$it,]))
+  perf$err.sim.A[i] = mean(abs(BWs[[i]]$est$A-A.sim))
+  perf$err.sim.B[i] = mean(abs(BWs[[i]]$est$B-B.sim))
+  perf$err.sim.pi[i] = mean(abs(BWs[[i]]$est$pi-pi.sim))
+  perf$loglik[i] = BWs[[i]]$loglik[BWs[[i]]$it]
+  perf$exec.time[i] = BWs[[i]]$exec.time
+  perf$it[i] = BWs[[i]]$it
+  
+  logBWs[[i]] = logBaumWelch(x,A,B,pi)
+  perf$err[20+i] = mean(as.matrix(logBWs[[i]]$err[logBWs[[i]]$it,]))
+  perf$err.sim.A[20+i] = mean(abs(logBWs[[i]]$est$A-A.sim))
+  perf$err.sim.B[20+i] = mean(abs(logBWs[[i]]$est$B-B.sim))
+  perf$err.sim.pi[20+i] = mean(abs(logBWs[[i]]$est$pi-pi.sim))
+  perf$loglik[20+i] = logBWs[[i]]$loglik[logBWs[[i]]$it]
+  perf$exec.time[20+i] = logBWs[[i]]$exec.time
+  perf$it[20+i] = logBWs[[i]]$it
+  perf$log[20+i] = TRUE
+}
+
+# visualisation des performances
+plot(perf$loglik,log10(perf$err.sim.A),col=rep(c("blue","red"),each=20),xlab="log-vraisemblance",ylab="log10-erreur",main="Erreur absolue moyenne entre A.est (Baum-Welch) et A.sim (empirique)")
+legend(x="topright",legend=c("sans log","avec log"),col=c("blue","red"),pch="o")
+
+plot(perf$loglik,log10(perf$err.sim.B),col=rep(c("blue","red"),each=20),xlab="log-vraisemblance",ylab="log10-erreur",main="Erreur absolue moyenne entre B.est (Baum-Welch) et B.sim (empirique)")
+legend(x="topright",legend=c("sans log","avec log"),col=c("blue","red"),pch="o")
+
+plot(perf$loglik,log10(perf$err.sim.pi),col=rep(c("blue","red"),each=20),xlab="log-vraisemblance",ylab="log10-erreur",main="Erreur absolue moyenne entre pi.est (Baum-Welch) et pi.sim (empirique)")
+legend(x="topright",legend=c("sans log","avec log"),col=c("blue","red"),pch="o")
+
+plot(perf$loglik,log10(3*perf$err),col=rep(c("blue","red"),each=20),xlab="log-vraisemblance",ylab="log10-erreur",main="Somme des erreurs abs. moy. entre theta.est (Baum-Welch) et theta")
+legend(x="topright",legend=c("sans log","avec log"),col=c("blue","red"),pch="o")
+
+plot(perf$it,perf$exec.time,col=rep(c("blue","red"),each=20),xlab="nombre d'itérations",ylab="temps d'exécution",main="Nombre d'itérations avant convergence et temps d'exécution")
+legend(x="topright",legend=c("sans log","avec log"),col=c("blue","red"),pch="o")
+```
+
+\
+On remarque que la méthode avec log est moins précise et plus variable
+(en termes de performances) que celle sans log et qu'elle mène à plus
+d'outliers malgré une log-vraisemblance plus importante dans les cas
+optimaux. Par ailleurs, même si elle a besoin de moins d'itérations pour
+converger, l'utilisation des fonctions log et exp augmentent nettement
+son temps d'exécution. Ainsi, dans notre cas, on préférera utiliser la
+fonction BaumWelch pour l'estimation des paramètres. Comme l'on n'est
+pas censé connaître les erreurs entre les paramètres estimés grâce aux
+états cachés et ceux estimés par l'algorithme de Baum-Welch, on choisit
+ceux qui maximisent la log-vraisemblance parmi les 20 calculés plus
+haut.\
+\
+
+```{r estimation des paramètres}
+i.opt = which.max(perf$loglik[perf$log==FALSE])
+
+A.est = BWs[[i.opt]]$est$A
+print(round(A.est,3))
+# Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(A.est-A)),mean(abs(A.est-A))))
+
+B.est = BWs[[i.opt]]$est$B
+print(round(B.est,3))
+# Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(B.est-B)),mean(abs(B.est-B))))
+
+pi.est = BWs[[i.opt]]$est$pi
+print(round(pi.est,3))
+# Précision (norme infinie / erreur absolue moyenne)
+print(c(max(abs(pi.est-pi)),mean(abs(pi.est-pi))))
+```
+
+## Question 3
+
+```{r estimation des états cachés}
+S = matrix(0, nrow=K, ncol=n)
+logV = matrix(-Inf, nrow=K, ncol=n)
+z.est = rep(0,n)
+eps = 1e-6
+
+for (k in 1:K){
+  logV[k,1] = log(B[x[1,1,1],k]+eps)+log(B[x[1,1,2],k]+eps)-log(K)
+}
+for (i in 2:n){
+  for (k in 1:K){
+    logV[k,i] = max(logV[,i-1]+log(A[,k])+log(B[x[1,i,1],k])+log(B[x[1,i,2],k]))
+    S[k,i-1] = which.max(logV[,i-1]+log(A[,k])+log(B[x[1,i,1],k])+log(B[x[1,i,2],k]))
+  }
+}
+
+z.est[n] = which.max(logV[,n])
+for (i in (n-1):1){
+  z.est[i] = S[z.est[i+1],i]
+}
+print(z.est)
+
+# Précision (taux de bonnes prédictions)
+print(sum(z.est==z[1,])/n)
+```
+
+## Question 4
+
+Les deux méthodes précedemment implémentées (Baum-Welch et Viterbi) sont
+assez précises et pourraient être utilisées pour plusieurs applications,
+comme par exemple la recommandation de pages Web d'un type particulier
+(i.e. sport, culture, beauté...) à un surfeur en fonction de son
+parcours sur le Web.\
+
+## Simulation de communautés
+
+## Question 1
+
+On note $y_i$ le couple de mots-clefs de la page $i$ et on considère que
+la communauté $z_i$ de cette même page suit une loi uniforme sur
+$\{1,...,K\}$.
+
+```{r simulation de X et de y}
+n = 90 ; K = 3
+alpha = 0.15 ; beta = 0.05
+X = matrix(0, nrow=n, ncol=n)
+z = sample(1:K, size=n, replace=TRUE, prob=rep(1/K,K))
+y = matrix(0, nrow=n, ncol=2)
+
+for (i in 1:n){
+  for (j in 1:n){
+    if (z[i]==z[j]){
+      p = alpha
+    }
+    else{
+      p = beta
+    }
+    X[i,j] = sample(0:1, size=1, prob=c(1-p,p))
+  }
+  y[i,] = sample(1:P, size=2, replace=TRUE, prob=B[,z[i]])
+}
+```
+
+## Question 2
+
+Les pages successives d'un même parcours de classe $k\in\{1,2\}$ forment
+une réalisation d'une chaîne de Markov de matrice de transition $A^k$.
+On suppose que le premier site de chaque parcours est tiré de manière
+uniforme. On réalise 500 parcours de longueurs 50 pour chacune des
+classes.
+
+```{r simulation des parcours}
+eps = 1/1000
+A1 = X+eps
+A2 = matrix(1/n, nrow=n, ncol=n)
+for (i in 1:n){
+  A1[i,] = A1[i,]/(sum(A1[i,]))
+}
+
+N = 500 ; L = 50
+x1 = array(0, dim=c(N,L,2))
+x2 = array(0, dim=c(N,L,2))
+for (i in 1:N){
+  n1 = sample(1:n, size=1, replace=TRUE, prob=rep(1/n,n))
+  x1[i,1,] = y[n1,]
+  n2 = sample(1:n, size=1, replace=TRUE, prob=rep(1/n,n))
+  x2[i,1,] = y[n2,]
+  for (l in 2:L){
+    n1 = sample(1:n, size=1, replace=TRUE, prob=A1[n1,])
+    x1[i,l,] = y[n1,]
+    n2 = sample(1:n, size=1, replace=TRUE, prob=A2[n2,])
+    x2[i,l,] = y[n2,]
+  }
+}
+```
+
+## Question 3
+
+On propose deux classifieurs, un premier qui
+
+CLASSIFIEUR 1 : -idée : for all times i, P(z_i=z\_{i+1} \| classe 1) \>
+P(z_i=z\_{i+1} \| classe 2) -données : (x,B,x1,x2,classes) -trouver les
+communautés C1\[i,l\] et C2\[i,l\] les plus probables pour chaque
+x1\[i,l\] et x2\[i,l\] à partir de B -trouver
+p_classe=P_classe(communaute\[i,l+1\]=k\|communaute\[i,l\]=k') avec
+k!=k' pour $classe \in \{1,2\}$ -classifieur f : f(x.new) = arg
+min_classe d(p.new,p_classe) (d : norme l1 ou l2)
+
+CLASSIFIEUR 2 : -données : (x,B,classes) -estimer pages : pages\[i\] =
+which(y==x\[i,\]) -estimer A avec pages : A\[i,j\] =
+n\[i,j\]/sum(n\[i,\]) -estimer classe.est : classe.est = arg
+min\_{k=1,2} (mean(abs(Ak-A)))
+
+CLASSIFIEUR 3 : -données : x1,x2 - -\
+
+```{r classifieur}
+C1 = matrix(0, nrow=N, ncol=L)
+C2 = matrix(0, nrow=N, ncol=L)
+p1 = 0 ; p2 = 0
+for (i in 1:N){
+  C1[i,1] = which.max(B[x1[i,1,1],]*B[x1[i,1,2],])
+  C2[i,1] = which.max(B[x2[i,1,1],]*B[x2[i,1,2],])  
+  for (l in 2:L){
+    C1[i,l] = which.max(B[x1[i,l,1],]*B[x1[i,l,2],])
+    C2[i,l] = which.max(B[x2[i,l,1],]*B[x2[i,l,2],])
+    if (C1[i,l]!=C1[i,l-1]){
+      p1 = p1+1
+    }
+    if (C2[i,l]!=C2[i,l-1]){
+      p2 = p2+1
+    }
+  }
+}
+p1 = p1/(N*(L-1))
+p2 = p2/(N*(L-1))
+
+classifieur1 = function(x){
+  L = dim(x)[1]
+  C = rep(0,L)
+  p = 0
+  C[1] = which.max(B[x[1,1],]*B[x[1,2],])
+  for (l in 2:L){
+    C[l] = which.max(B[x[l,1],]*B[x[l,2],])
+    if (C[l]!=C[l-1]){
+      p = p+1
+    }
+  }
+  p = p/(L-1)
+  return(which.min(abs(c(p1,p2)-p)))
+}
+
+classifieur2 = function(x){
+  L = dim(x)[1]
+  num = matrix(0, nrow=n, ncol=n)
+  pages.prev = which(y[,1]==x[1,1] & y[,2]==x[1,2])
+  for (i in 2:L){
+    pages.next = which(y[,1]==x[i,1] & y[,2]==x[i,2])
+    num[pages.prev,pages.next] = num[pages.prev,pages.next]+1
+    pages.prev = pages.next
+  }
+  A = num
+  for (k in 1:n){
+    if (any(num[k,] != 0)){
+      A[k,] = A[k,]/sum(num[k,])
+    }
+  }
+  return(which.min(c(mean(abs(A-A1)),mean(abs(A-A2)))))
+}
+
+classifieur3 = function(x){
+  L = dim(x)[1]
+  num = matrix(0, nrow=n, ncol=n)
+  pages.prev = which(y[,1]==x[1,1] & y[,2]==x[1,2])
+  for (i in 2:L){
+    pages.next = which(y[,1]==x[i,1] & y[,2]==x[i,2])
+    num[pages.prev,pages.next] = num[pages.prev,pages.next]+1
+    pages.prev = pages.next
+  }
+  A = num
+  for (k in 1:n){
+    if (any(num[k,] != 0)){
+      A[k,] = A[k,]/sum(num[k,])
+    }
+  }
+  return(which.min(c(sum((A-A1)**2),sum((A-A2)**2))))
+}
+```
+
+## Question 4
+
+faire varier L
+
+```{r évaluation des performances}
+long = (L/2):(4*L)
+classe.est1 = array(0, dim=c(length(long),10,2))
+classe.est2 = array(0, dim=c(length(long),10,2))
+classe.est3 = array(0, dim=c(length(long),10,2))
+l.ind = 0
+for (l in long){
+  l.ind = l.ind+1
+  for (i in 1:10){
+    x1.new = matrix(0, nrow=l, ncol=2)
+    x2.new = matrix(0, nrow=l, ncol=2)
+    n1 = sample(1:n, size=1, replace=TRUE, prob=rep(1/n,n))
+    x1.new[1,] = y[n1,]
+    n2 = sample(1:n, size=1, replace=TRUE, prob=rep(1/n,n))
+    x2.new[1,] = y[n2,]
+    for (k in 2:l){
+      n1 = sample(1:n, size=1, replace=TRUE, prob=A1[n1,])
+      x1.new[k,] = y[n1,]
+      n2 = sample(1:n, size=1, replace=TRUE, prob=A2[n2,])
+      x2.new[k,] = y[n2,]
+    }
+    classe.est1[l.ind,i,1] = classifieur1(x1.new)
+    classe.est1[l.ind,i,2] = classifieur1(x2.new)
+    classe.est2[l.ind,i,1] = classifieur2(x1.new)
+    classe.est2[l.ind,i,2] = classifieur2(x2.new)
+    classe.est3[l.ind,i,1] = classifieur3(x1.new)
+    classe.est3[l.ind,i,2] = classifieur3(x2.new)    
+  }
+}
+
+err1 = rep(0,l.ind)
+err2 = rep(0,l.ind)
+err3 = rep(0,l.ind)
+for (l in 1:(l.ind)){
+  err1[l] = sum(classe.est1[l,,1]==2)+sum(classe.est1[l,,2]==1)
+  err1[l] = err1[l]/(2*10)
+  err2[l] = sum(classe.est2[l,,1]==2)+sum(classe.est2[l,,2]==1)
+  err2[l] = err2[l]/(2*10)
+  err3[l] = sum(classe.est3[l,,1]==2)+sum(classe.est3[l,,2]==1)
+  err3[l] = err3[l]/(2*10)
+}
+
+reg1 = glm(err1~long)
+reg2 = glm(err2~long)
+reg3 = glm(err3~long)
+plot(long, err1, xlab="L", ylab="taux d'erreur")
+lines(long, reg1$coefficients["(Intercept)"]+reg1$coefficients["long"]*long)
+plot(long, err2, xlab="L", ylab="taux d'erreur")
+lines(long, reg2$coefficients["(Intercept)"]+reg2$coefficients["long"]*long)
+plot(long, err3, xlab="L", ylab="taux d'erreur")
+lines(long, reg3$coefficients["(Intercept)"]+reg3$coefficients["long"]*long)
+
+perf1 = matrix(0, nrow=4, ncol=2,byrow=TRUE)
+perf2 = matrix(0, nrow=4, ncol=2,byrow=TRUE)
+perf3 = matrix(0, nrow=4, ncol=2,byrow=TRUE)
+for (k in 1:4){
+  l.inds = (1:l.ind)[long>c(0,50,100,150,200)[k] & long<=c(0,50,100,150,200)[k+1]]
+  perf1[k,1] = mean(err1[l.inds])
+  perf1[k,2] = sd(err1[l.inds])
+  perf2[k,1] = mean(err2[l.inds])
+  perf2[k,2] = sd(err2[l.inds])
+  perf3[k,1] = mean(err3[l.inds])
+  perf3[k,2] = sd(err3[l.inds])
+}
+perf1 = data.frame(perf1)
+perf2 = data.frame(perf2)
+perf3 = data.frame(perf3)
+rownames(perf1) = c("1:50","51:100","101:150","151:200")
+colnames(perf1) = c("taux d'erreur moyen","écart-type")
+rownames(perf2) = c("1:50","51:100","101:150","151:200")
+colnames(perf2) = c("taux d'erreur moyen","écart-type")
+rownames(perf3) = c("1:50","51:100","101:150","151:200")
+colnames(perf3) = c("taux d'erreur moyen","écart-type")
+perf1
+perf2
+perf3
+```
